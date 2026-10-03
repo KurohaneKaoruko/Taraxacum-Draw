@@ -26,6 +26,14 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>TaraxacumDraw 需要访问本地网络，以便发现并连接同一 Wi-Fi 下的绘画房间。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_taraxacum._tcp</string>
+	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>TaraxacumDraw 需要保存画作图片到您的相册。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
