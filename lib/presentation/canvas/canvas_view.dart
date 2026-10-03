@@ -47,6 +47,16 @@ class CanvasPage extends ConsumerWidget {
             icon: const Icon(Icons.undo),
             onPressed: controller.undo,
           ),
+          IconButton(
+            tooltip: '重做',
+            icon: const Icon(Icons.redo),
+            onPressed: controller.redo,
+          ),
+          IconButton(
+            tooltip: '清空画布',
+            icon: const Icon(Icons.delete_sweep),
+            onPressed: () => _confirmClear(context, controller),
+          ),
         ],
       ),
       body: Column(
@@ -94,6 +104,28 @@ class CanvasPage extends ConsumerWidget {
       if (layer.id == ui.activeLayerId) return layer.name;
     }
     return '图层';
+  }
+
+  /// 清空前确认（drawing-canvas 规格要求）。
+  Future<void> _confirmClear(BuildContext context, CanvasController controller) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('清空画布'),
+        content: const Text('将清除所有图层上的全部内容，可通过撤销恢复。确定继续？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) controller.clearCanvas();
   }
 
   static Stroke? _activeStrokeOf(CanvasUiState ui) {

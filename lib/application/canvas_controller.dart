@@ -209,25 +209,59 @@ class CanvasController extends Notifier<CanvasUiState> {
   /// 指针取消：丢弃进行中笔画。
   void onPointerCancel() => state = state.copyWith(clearInProgress: true);
 
-  /// 撤销自己最近一条未撤销的操作（完整撤销/重做在 task 2.3 完善）。
+  /// 撤销自己最近一条未撤销的操作。
   void undo() {
     for (final op in state.document.log.reversed) {
       if (op.authorId == 'local' &&
           op is! UndoOp &&
           state.document.isEffective(op.opId)) {
-        state.document.applyOp(
-          UndoOp(
-            opId: _uuid.v4(),
-            authorId: 'local',
-            lamport: _clock.tick(),
-            wallTimeMs: DateTime.now().millisecondsSinceEpoch,
-            undoneOpId: op.opId,
-          ),
-        );
-        state = state.copyWith(); // 新实例触发界面刷新
+        _applyUndoOf(op.opId);
         return;
       }
     }
+  }
+
+  /// 重做：恢复最近一次被撤销的用户操作。
+  ///
+  /// 只考虑"实际压制了非撤销类操作"的生效撤销 op（跳过 redo 机制
+  /// 自身产生的撤销的撤销），取日志中最新的一条，撤销它。
+  void redo() {
+    final doc = state.document;
+    for (final op in doc.log.reversed) {
+      if (op is! UndoOp || op.authorId != 'local') continue;
+      if (!doc.isEffective(op.opId)) continue;
+
+      Op? target;
+      for (final candidate in doc.log) {
+        if (candidate.opId == op.undoneOpId) {
+          target = candidate;
+          break;
+        }
+      }
+      if (target == null || target is UndoOp) continue;
+      if (doc.isEffective(target.opId)) continue;
+      _applyUndoOf(op.opId);
+      return;
+    }
+  }
+
+  void _applyUndoOf(String targetOpId) {
+    state.document.applyOp(
+      UndoOp(
+        opId: _uuid.v4(),
+        authorId: 'local',
+        lamport: _clock.tick(),
+        wallTimeMs: DateTime.now().millisecondsSinceEpoch,
+        undoneOpId: targetOpId,
+      ),
+    );
+    state = state.copyWith(); // 新实例触发界面刷新
+  }
+
+  /// 清空画布（保留图层结构；UI 侧需先弹确认，见 drawing-canvas 规格）。
+  void clearCanvas() {
+    _apply((opId, lamport, wall) =>
+        ClearCanvasOp(opId: opId, authorId: 'local', lamport: lamport, wallTimeMs: wall));
   }
 }
 
