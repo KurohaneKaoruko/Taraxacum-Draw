@@ -32,6 +32,11 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# Force UTF-8 source interpretation. MSVC defaults to the system code page
+# (cp936 on Chinese Windows); plugin sources containing UTF-8 comments then
+# trigger C4819, which /WX (see APPLY_STANDARD_SETTINGS) promotes to an error.
+add_compile_options("/utf-8")
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by
