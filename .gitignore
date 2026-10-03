@@ -1,0 +1,50 @@
+# ===== OpenSpec / OpenCode 本地工作流（不入库） =====
+.opencode/
+openspec/
+
+# ===== Flutter / Dart =====
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+coverage/
+**/generated_plugin_registrant.dart
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.code-workspace
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Logs / temp =====
+*.log
+*.tmp
+*.swp
+
+# ===== Android =====
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+**/android/app/upload-keystore.jks
+**/android/captures/
+
+# ===== iOS / macOS =====
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/.last_build_id
+**/macos/Pods/
+**/macos/Flutter/ephemeral/
+
+# ===== Windows / Linux =====
+**/windows/flutter/ephemeral/
+**/linux/flutter/ephemeral/
