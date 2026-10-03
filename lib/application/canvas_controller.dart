@@ -1,9 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:taraxacum_draw/domain/canvas_document.dart';
 import 'package:taraxacum_draw/domain/ids.dart';
 import 'package:taraxacum_draw/domain/lamport_clock.dart';
+import 'package:taraxacum_draw/domain/layer.dart';
 import 'package:taraxacum_draw/domain/op.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
 
@@ -65,6 +68,97 @@ class CanvasController extends Notifier<CanvasUiState> {
   void setTool(DrawTool tool) => state = state.copyWith(tool: tool);
   void setColor(int color) => state = state.copyWith(color: color);
   void setWidth(double width) => state = state.copyWith(width: width);
+  void setActiveLayer(LayerId layerId) =>
+      state = state.copyWith(activeLayerId: layerId);
+
+  // ===== 图层操作（全部以 op 入账，可撤销）=====
+
+  /// 新建图层并设为当前层。
+  void addLayer() {
+    final layers = state.document.state.layers;
+    final maxOrder =
+        layers.map((l) => l.order).reduce((a, b) => math.max(a, b));
+    final layer = Layer(
+      id: _uuid.v4(),
+      name: '图层 ${layers.length + 1}',
+      order: maxOrder + 1,
+    );
+    _apply((opId, lamport, wall) => AddLayerOp(
+          opId: opId,
+          authorId: 'local',
+          lamport: lamport,
+          wallTimeMs: wall,
+          layer: layer,
+        ));
+    state = state.copyWith(activeLayerId: layer.id);
+  }
+
+  /// 删除图层；至少保留一个图层。其上的笔迹随重放一并消失。
+  void removeLayer(LayerId layerId) {
+    final layers = state.document.state.layers;
+    if (layers.length <= 1) return;
+    _apply((opId, lamport, wall) => RemoveLayerOp(
+          opId: opId,
+          authorId: 'local',
+          lamport: lamport,
+          wallTimeMs: wall,
+          layerId: layerId,
+        ));
+    if (state.activeLayerId == layerId) {
+      // 回退到存活的顶层。
+      final next = layers.where((l) => l.id != layerId).last;
+      state = state.copyWith(activeLayerId: next.id);
+    }
+  }
+
+  /// 切换图层可见性。
+  void toggleLayerVisible(LayerId layerId) {
+    final layer =
+        state.document.state.layers.firstWhere((l) => l.id == layerId);
+    _apply((opId, lamport, wall) => SetLayerVisibleOp(
+          opId: opId,
+          authorId: 'local',
+          lamport: lamport,
+          wallTimeMs: wall,
+          layerId: layerId,
+          visible: !layer.visible,
+        ));
+  }
+
+  /// 上移/下移一层（towardTop = true 表示朝顶层方向）。
+  ///
+  /// 交换相邻两层的 order，各产生一条 MoveLayerOp。
+  void moveLayer(LayerId layerId, {required bool towardTop}) {
+    final sorted = state.document.state.layers; // 底 → 顶
+    final index = sorted.indexWhere((l) => l.id == layerId);
+    final swapIndex = towardTop ? index + 1 : index - 1;
+    if (swapIndex < 0 || swapIndex >= sorted.length) return;
+    final other = sorted[swapIndex];
+    _apply((opId, lamport, wall) => MoveLayerOp(
+          opId: opId,
+          authorId: 'local',
+          lamport: lamport,
+          wallTimeMs: wall,
+          layerId: other.id,
+          newOrder: sorted[index].order,
+        ));
+    _apply((opId, lamport, wall) => MoveLayerOp(
+          opId: opId,
+          authorId: 'local',
+          lamport: lamport,
+          wallTimeMs: wall,
+          layerId: layerId,
+          newOrder: other.order,
+        ));
+  }
+
+  void _apply(Op Function(String opId, int lamport, int wallTimeMs) build) {
+    state.document.applyOp(
+      build(_uuid.v4(), _clock.tick(), DateTime.now().millisecondsSinceEpoch),
+    );
+    state = state.copyWith(); // 新实例触发刷新
+  }
+
 
   /// 指针按下：开始一笔。
   void onPointerDown(double x, double y, double? pressure) {

@@ -5,6 +5,7 @@ import 'package:taraxacum_draw/application/canvas_controller.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
 import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
 import 'package:taraxacum_draw/presentation/canvas/document_painter.dart';
+import 'package:taraxacum_draw/presentation/canvas/layer_panel.dart';
 
 /// 预设笔色（完整取色器留到后续任务）。
 const _presetColors = <int>[
@@ -33,10 +34,18 @@ class CanvasPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('TaraxacumDraw'),
         actions: [
+          TextButton.icon(
+            onPressed: () => showModalBottomSheet(
+              context: context,
+              builder: (_) => const LayerPanel(),
+            ),
+            icon: const Icon(Icons.layers),
+            label: Text(_activeLayerName(ui)),
+          ),
           IconButton(
             tooltip: '撤销',
             icon: const Icon(Icons.undo),
-            onPressed: controller.undo, // task 2.3 实现
+            onPressed: controller.undo,
           ),
         ],
       ),
@@ -79,6 +88,13 @@ class CanvasPage extends ConsumerWidget {
   /// 鼠标 pressure 恒为 0（或 1）无意义，仅手写笔上报真实压力。
   static double? _naturalPressure(double pressure) =>
       pressure > 0 && pressure < 1 ? pressure : null;
+
+  static String _activeLayerName(CanvasUiState ui) {
+    for (final layer in ui.document.state.layers) {
+      if (layer.id == ui.activeLayerId) return layer.name;
+    }
+    return '图层';
+  }
 
   static Stroke? _activeStrokeOf(CanvasUiState ui) {
     final points = ui.inProgress;
