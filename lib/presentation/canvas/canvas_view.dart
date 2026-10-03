@@ -1,7 +1,12 @@
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:taraxacum_draw/application/canvas_controller.dart';
+import 'package:taraxacum_draw/application/view_transform.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
 import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
 import 'package:taraxacum_draw/presentation/canvas/document_painter.dart';
@@ -18,8 +23,6 @@ const _presetColors = <int>[
 ];
 
 /// 画布页面：工具栏 + 绘画区域。
-///
-/// 视图变换（缩放/平移）在 task 2.5 接入；当前指针坐标即画布逻辑坐标。
 class CanvasPage extends ConsumerWidget {
   const CanvasPage({super.key});
 
@@ -65,39 +68,13 @@ class CanvasPage extends ConsumerWidget {
           const Divider(height: 1),
           Expanded(
             child: ClipRect(
-              child: Listener(
-                behavior: HitTestBehavior.opaque,
-                onPointerDown: (event) => controller.onPointerDown(
-                  event.localPosition.dx,
-                  event.localPosition.dy,
-                  _naturalPressure(event.pressure),
-                ),
-                onPointerMove: (event) => controller.onPointerMove(
-                  event.localPosition.dx,
-                  event.localPosition.dy,
-                  _naturalPressure(event.pressure),
-                ),
-                onPointerUp: (_) => controller.onPointerUp(),
-                onPointerCancel: (_) => controller.onPointerCancel(),
-                child: CustomPaint(
-                  size: Size.infinite,
-                  painter: DocumentPainter(
-                    cache: cache,
-                    state: ui.document.state,
-                    activeStroke: _activeStrokeOf(ui),
-                  ),
-                ),
-              ),
+              child: _CanvasInputArea(cache: cache),
             ),
           ),
         ],
       ),
     );
   }
-
-  /// 鼠标 pressure 恒为 0（或 1）无意义，仅手写笔上报真实压力。
-  static double? _naturalPressure(double pressure) =>
-      pressure > 0 && pressure < 1 ? pressure : null;
 
   static String _activeLayerName(CanvasUiState ui) {
     for (final layer in ui.document.state.layers) {
@@ -107,7 +84,8 @@ class CanvasPage extends ConsumerWidget {
   }
 
   /// 清空前确认（drawing-canvas 规格要求）。
-  Future<void> _confirmClear(BuildContext context, CanvasController controller) async {
+  Future<void> _confirmClear(
+      BuildContext context, CanvasController controller) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -126,6 +104,168 @@ class CanvasPage extends ConsumerWidget {
       ),
     );
     if (confirmed == true) controller.clearCanvas();
+  }
+}
+
+/// 绘画输入区：单指/鼠标左键绘制，双指捏合缩放+平移，
+/// 滚轮缩放，空格/中键拖拽平移。
+class _CanvasInputArea extends ConsumerStatefulWidget {
+  const _CanvasInputArea({required this.cache});
+
+  final LayerRasterCache cache;
+
+  @override
+  ConsumerState<_CanvasInputArea> createState() => _CanvasInputAreaState();
+}
+
+class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
+  final Map<int, Offset> _pointers = {};
+  bool _navigating = false; // 双指手势进行中
+  bool _panning = false; // 空格/中键拖拽
+  Offset? _panLast;
+  Offset? _pinchLastMid;
+  double? _pinchLastDist;
+
+  CanvasController get _controller =>
+      ref.read(canvasProvider.notifier);
+
+  ViewTransform get _view => ref.read(canvasProvider).view;
+
+  bool get _spaceHeld => HardwareKeyboard.instance.isLogicalKeyPressed(
+        LogicalKeyboardKey.space,
+      );
+
+  void _onDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+
+    if (_pointers.length == 2) {
+      // 第二根手指落下：进入双指导航，丢弃进行中笔画。
+      _navigating = true;
+      _controller.onPointerCancel();
+      _pinchLastMid = _midOf(_pointers.values);
+      _pinchLastDist = _distOf(_pointers.values);
+      return;
+    }
+    if (_pointers.length > 2) return;
+
+    if (_spaceHeld || event.buttons == kMiddleMouseButton) {
+      _panning = true;
+      _panLast = event.localPosition;
+      return;
+    }
+
+    final canvasPos = _view.toCanvas(event.localPosition);
+    _controller.onPointerDown(
+      canvasPos.dx,
+      canvasPos.dy,
+      _naturalPressure(event.pressure),
+    );
+  }
+
+  void _onMove(PointerMoveEvent event) {
+    if (_pointers.containsKey(event.pointer)) {
+      _pointers[event.pointer] = event.localPosition;
+    }
+
+    if (_navigating) {
+      if (_pointers.length >= 2) {
+        final mid = _midOf(_pointers.values);
+        final dist = _distOf(_pointers.values);
+        if (_pinchLastDist != null && _pinchLastDist! > 0 && _pinchLastMid != null) {
+          var t = _view.zoomAt(mid, dist / _pinchLastDist!);
+          t = t.panBy(mid - _pinchLastMid!);
+          _controller.setView(t);
+        }
+        _pinchLastMid = mid;
+        _pinchLastDist = dist;
+      }
+      return;
+    }
+
+    if (_panning) {
+      _controller.setView(_view.panBy(event.localPosition - _panLast!));
+      _panLast = event.localPosition;
+      return;
+    }
+
+    // 绘制中：仅首个指针产生笔迹。
+    final inProgress = ref.read(canvasProvider).inProgress;
+    if (inProgress != null && _pointers.isNotEmpty) {
+      final canvasPos = _view.toCanvas(event.localPosition);
+      _controller.onPointerMove(
+        canvasPos.dx,
+        canvasPos.dy,
+        _naturalPressure(event.pressure),
+      );
+    }
+  }
+
+  void _onUp(PointerEvent event) {
+    _pointers.remove(event.pointer);
+    if (_navigating) {
+      if (_pointers.length < 2) {
+        _navigating = false;
+        _pinchLastMid = null;
+        _pinchLastDist = null;
+      }
+      return;
+    }
+    if (_panning) {
+      _panning = false;
+      return;
+    }
+    if (event is PointerUpEvent) {
+      _controller.onPointerUp();
+    } else {
+      _controller.onPointerCancel();
+    }
+  }
+
+  void _onSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent) {
+      final factor = math.exp(-event.scrollDelta.dy * 0.0015);
+      _controller.setView(_view.zoomAt(event.localPosition, factor));
+    }
+  }
+
+  static Offset _midOf(Iterable<Offset> points) {
+    final list = points.toList();
+    return Offset(
+      list.fold(0.0, (s, p) => s + p.dx) / list.length,
+      list.fold(0.0, (s, p) => s + p.dy) / list.length,
+    );
+  }
+
+  static double _distOf(Iterable<Offset> points) {
+    final list = points.toList();
+    if (list.length < 2) return 0;
+    return (list[0] - list[1]).distance;
+  }
+
+  /// 鼠标 pressure 恒为 0（或 1）无意义，仅手写笔上报真实压力。
+  static double? _naturalPressure(double pressure) =>
+      pressure > 0 && pressure < 1 ? pressure : null;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = ref.watch(canvasProvider);
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: _onDown,
+      onPointerMove: _onMove,
+      onPointerUp: _onUp,
+      onPointerCancel: _onUp,
+      onPointerSignal: _onSignal,
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: DocumentPainter(
+          cache: widget.cache,
+          state: ui.document.state,
+          view: ui.view,
+          activeStroke: _activeStrokeOf(ui),
+        ),
+      ),
+    );
   }
 
   static Stroke? _activeStrokeOf(CanvasUiState ui) {
@@ -220,7 +360,8 @@ class _ColorDot extends StatelessWidget {
             color: Color(color),
             shape: BoxShape.circle,
             border: Border.all(
-              color: selected ? Theme.of(context).colorScheme.primary : Colors.white,
+              color:
+                  selected ? Theme.of(context).colorScheme.primary : Colors.white,
               width: selected ? 3 : 1,
             ),
           ),

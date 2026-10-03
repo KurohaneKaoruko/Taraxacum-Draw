@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:taraxacum_draw/application/view_transform.dart';
 import 'package:taraxacum_draw/domain/canvas_document.dart';
 import 'package:taraxacum_draw/domain/ids.dart';
 import 'package:taraxacum_draw/domain/lamport_clock.dart';
@@ -10,7 +11,7 @@ import 'package:taraxacum_draw/domain/layer.dart';
 import 'package:taraxacum_draw/domain/op.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
 
-/// 画布界面状态：文档 + 进行中笔画 + 当前工具设置。
+/// 画布界面状态：文档 + 视图变换 + 进行中笔画 + 当前工具设置。
 class CanvasUiState {
   const CanvasUiState({
     required this.document,
@@ -18,6 +19,7 @@ class CanvasUiState {
     required this.color,
     required this.width,
     required this.activeLayerId,
+    this.view = const ViewTransform(),
     this.inProgress,
   });
 
@@ -27,6 +29,9 @@ class CanvasUiState {
   final double width;
   final LayerId activeLayerId;
 
+  /// 视图变换（缩放/平移），只影响显示，不影响画布内容与他人视图。
+  final ViewTransform view;
+
   /// 正在绘制中的笔画（未定稿，不进入文档）。
   final List<StrokePoint>? inProgress;
 
@@ -35,6 +40,7 @@ class CanvasUiState {
     int? color,
     double? width,
     LayerId? activeLayerId,
+    ViewTransform? view,
     List<StrokePoint>? inProgress,
     bool clearInProgress = false,
   }) =>
@@ -44,6 +50,7 @@ class CanvasUiState {
         color: color ?? this.color,
         width: width ?? this.width,
         activeLayerId: activeLayerId ?? this.activeLayerId,
+        view: view ?? this.view,
         inProgress: clearInProgress ? null : (inProgress ?? this.inProgress),
       );
 }
@@ -70,6 +77,7 @@ class CanvasController extends Notifier<CanvasUiState> {
   void setWidth(double width) => state = state.copyWith(width: width);
   void setActiveLayer(LayerId layerId) =>
       state = state.copyWith(activeLayerId: layerId);
+  void setView(ViewTransform view) => state = state.copyWith(view: view);
 
   // ===== 图层操作（全部以 op 入账，可撤销）=====
 

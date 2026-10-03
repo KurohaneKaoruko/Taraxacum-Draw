@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'package:taraxacum_draw/application/view_transform.dart';
 import 'package:taraxacum_draw/domain/canvas_document.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
 import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
@@ -12,20 +13,27 @@ class DocumentPainter extends CustomPainter {
   DocumentPainter({
     required this.cache,
     required this.state,
+    required this.view,
     required this.activeStroke,
   });
 
   final LayerRasterCache cache;
   final CanvasState state;
+  final ViewTransform view;
   final Stroke? activeStroke;
 
   @override
   void paint(ui.Canvas canvas, ui.Size size) {
-    // 画板底色。
+    // 画板底色（屏幕空间）。
     canvas.drawRect(
       Offset.zero & size,
       ui.Paint()..color = const ui.Color(0xFFFFFFFF),
     );
+
+    // 视图变换：内容进入画布逻辑坐标系。
+    canvas.save();
+    canvas.translate(view.offset.dx, view.offset.dy);
+    canvas.scale(view.scale, view.scale);
 
     final seen = <String>{};
     for (final layer in state.layers) {
@@ -34,7 +42,7 @@ class DocumentPainter extends CustomPainter {
 
       final strokes = state.strokesByLayer[layer.id] ?? const <Stroke>[];
       // saveLayer 使橡皮的 dstOut 只作用于本层。
-      canvas.saveLayer(Offset.zero & size, ui.Paint());
+      canvas.saveLayer(null, ui.Paint());
       final picture = cache.pictureFor(layer.id, strokes);
       if (picture != null) canvas.drawPicture(picture);
       final active = activeStroke;
@@ -48,10 +56,12 @@ class DocumentPainter extends CustomPainter {
     for (final id in cache.keys.where((id) => !seen.contains(id)).toList()) {
       cache.drop(id);
     }
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(DocumentPainter oldDelegate) =>
       oldDelegate.state != state ||
+      oldDelegate.view != view ||
       !identical(oldDelegate.activeStroke, activeStroke);
 }
