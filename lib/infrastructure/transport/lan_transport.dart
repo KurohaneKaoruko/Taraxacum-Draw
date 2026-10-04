@@ -6,6 +6,7 @@ import 'package:bonsoir/bonsoir.dart';
 import 'package:taraxacum_draw/domain/envelope.dart';
 import 'package:taraxacum_draw/domain/ids.dart';
 import 'package:taraxacum_draw/infrastructure/transport/envelope_codec.dart';
+import 'package:taraxacum_draw/infrastructure/transport/heartbeat.dart';
 import 'package:taraxacum_draw/infrastructure/transport/transport.dart';
 
 /// mDNS 服务类型（iOS NSBonjourServices 已同步声明）。
@@ -49,9 +50,13 @@ class LanPeerLink extends PeerLink {
   }
 
   @override
-  Future<void> close() async {
-    _finish(PeerEventKind.left);
-    await _socket.flush().catchError((_) {});
+  Future<void> close([PeerEventKind reason = PeerEventKind.left]) async {
+    _finish(reason);
+    // 对端已销毁连接时 flush 可能永不完成，超时兜底。
+    await _socket.flush().timeout(
+          const Duration(seconds: 1),
+          onTimeout: () {},
+        );
     _socket.destroy();
   }
 
@@ -105,6 +110,8 @@ class LanTransport extends Transport {
     required super.selfPeer,
     this.enableMdns = true,
     this.serviceNamePrefix = 'TD',
+    this.heartbeatInterval = const Duration(seconds: 3),
+    this.heartbeatTimeout = const Duration(seconds: 10),
   });
 
   static const String _roomAttr = 'room';
@@ -113,14 +120,14 @@ class LanTransport extends Transport {
 
   final bool enableMdns;
   final String serviceNamePrefix;
+  final Duration heartbeatInterval;
+  final Duration heartbeatTimeout;
 
   ServerSocket? _server;
   BonsoirBroadcast? _broadcast;
   BonsoirDiscovery? _discovery;
   StreamSubscription<BonsoirDiscoveryEvent>? _discoverySub;
 
-  final StreamController<PeerLink> _incoming =
-      StreamController<PeerLink>.broadcast();
   final StreamController<Envelope> _messages =
       StreamController<Envelope>.broadcast();
   final StreamController<PeerEvent> _peerEvents =
@@ -128,6 +135,7 @@ class LanTransport extends Transport {
   final StreamController<DiscoveredRoom> _rooms =
       StreamController<DiscoveredRoom>.broadcast();
   final Map<PeerId, LanPeerLink> _links = {};
+  final Map<PeerId, LinkHeartbeat> _heartbeats = {};
   final Set<String> _announcedRoomIds = {};
 
   bool _running = false;
@@ -138,9 +146,6 @@ class LanTransport extends Transport {
 
   @override
   bool get isRunning => _running;
-
-  @override
-  Stream<PeerLink> get incomingLinks => _incoming.stream;
 
   @override
   Stream<Envelope> get messages => _messages.stream;
@@ -161,7 +166,11 @@ class LanTransport extends Transport {
     if (asHost) {
       _server = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
       _server!.listen(
-        (socket) => _attach(LanPeerLink._(socket), announceIncoming: true),
+        (socket) {
+          final link = LanPeerLink._(socket);
+          _attach(link);
+          publishIncomingLink(link);
+        },
         onError: (Object _) {},
       );
       if (enableMdns) await _register(roomId);
@@ -184,7 +193,11 @@ class LanTransport extends Transport {
       await link.close();
     }
     _links.clear();
-    await _incoming.close();
+    for (final heartbeat in _heartbeats.values) {
+      heartbeat.dispose();
+    }
+    _heartbeats.clear();
+    await incomingController.close();
     await _messages.close();
     await _peerEvents.close();
     await _rooms.close();
@@ -197,12 +210,18 @@ class LanTransport extends Transport {
     return link;
   }
 
-  void _attach(LanPeerLink link, {bool announceIncoming = false}) {
-    if (announceIncoming) _incoming.add(link);
+  void _attach(LanPeerLink link) {
     link.messages.listen((envelope) {
       final peer = link.remotePeer;
       if (peer != 'unknown' && !_links.containsKey(peer)) {
         _links[peer] = link;
+        _heartbeats[peer] = LinkHeartbeat(
+          link: link,
+          selfPeer: selfPeer,
+          roomId: envelope.roomId,
+          interval: heartbeatInterval,
+          timeout: heartbeatTimeout,
+        );
         _peerEvents.add(PeerEvent(peer: peer, kind: PeerEventKind.joined));
       }
       _messages.add(envelope);
@@ -215,6 +234,7 @@ class LanTransport extends Transport {
     final peer = link.remotePeer;
     if (peer == 'unknown' || !_links.containsKey(peer)) return;
     _links.remove(peer);
+    _heartbeats.remove(peer)?.dispose();
     _peerEvents.add(PeerEvent(peer: peer, kind: closedKind ?? PeerEventKind.left));
   }
 

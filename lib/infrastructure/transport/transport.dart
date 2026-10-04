@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:taraxacum_draw/domain/envelope.dart';
 import 'package:taraxacum_draw/domain/ids.dart';
 
@@ -68,7 +69,8 @@ abstract class PeerLink {
 
   Future<void> send(Envelope message);
 
-  Future<void> close();
+  /// 关闭链路。[reason] 决定对端看到的事件语义（left/lost）。
+  Future<void> close([PeerEventKind reason = PeerEventKind.left]);
 
   bool get isOpen;
 }
@@ -77,10 +79,18 @@ abstract class PeerLink {
 ///
 /// 实现负责：链路建立（拨号/接受）、链路级编解码、对端上下线事件。
 /// 上层（房间/同步）只面向本接口与 [PeerLink]。
+///
+/// 订阅契约：[messages]/[peerEvents] 为广播流，**须在 start/dial 之前
+/// 订阅**；被动接入请使用带缓冲的 [accept]（事件不丢）。
 abstract class Transport {
   Transport({required this.selfPeer});
 
   final PeerId selfPeer;
+
+  /// 实现向基类发布进站链路的出口（仅实现类使用，勿在业务层引用）。
+  // ignore: prefer_final_fields
+  StreamController<PeerLink> incomingController =
+      StreamController<PeerLink>.broadcast();
 
   ConnectionMode get mode;
 
@@ -94,8 +104,31 @@ abstract class Transport {
   /// 主动拨号；端点类型由实现定义（LAN 为 [LanEndpoint]）。
   Future<PeerLink> dial(Object endpoint);
 
-  /// 被动接受的进站链路（房主侧）。
-  Stream<PeerLink> get incomingLinks => const Stream.empty();
+  /// 取下一条被动接入的链路（带缓冲：start 后、accept 前的进站不丢）。
+  Future<PeerLink> accept() {
+    if (_pendingLinks.isNotEmpty) {
+      return Future.value(_pendingLinks.removeAt(0));
+    }
+    return (_linkWaiter ??= Completer<PeerLink>()).future;
+  }
+
+  /// 由实现调用：发布一条被动接受的链路。
+  void publishIncomingLink(PeerLink link) {
+    final waiter = _linkWaiter;
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete(link);
+      _linkWaiter = null;
+    } else {
+      _pendingLinks.add(link);
+    }
+    incomingController.add(link);
+  }
+
+  final List<PeerLink> _pendingLinks = [];
+  Completer<PeerLink>? _linkWaiter;
+
+  /// 被动接受的进站链路（广播流，晚订阅会丢事件；用 [accept] 代替）。
+  Stream<PeerLink> get incomingLinks => incomingController.stream;
 
   /// 聚合的全部链路消息（按链路解码后）。
   Stream<Envelope> get messages => const Stream.empty();

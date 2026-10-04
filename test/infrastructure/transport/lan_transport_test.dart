@@ -25,15 +25,15 @@ void main() {
     expect(host.boundPort, greaterThan(0));
 
     // 先订阅，再连接，避免广播流丢事件。
-    final hostMessageFuture = host.messages.first.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () => throw TimeoutException('host 未收到消息'),
-    );
+    final acceptedFuture = host.accept();
     final hostJoinedFuture = host.peerEvents.first.timeout(
       const Duration(seconds: 5),
       onTimeout: () => throw TimeoutException('host 未收到 joined'),
     );
-    final hostLinkFuture = host.incomingLinks.first;
+    final hostMessageFuture = host.messages.first.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => throw TimeoutException('host 未收到消息'),
+    );
 
     final guest = LanTransport(selfPeer: 'guest-1', enableMdns: false);
     final guestLink =
@@ -43,7 +43,7 @@ void main() {
     // 成员 → 房主。
     await guestLink.send(makeEnvelope('guest-1'));
 
-    final acceptedLink = await hostLinkFuture;
+    final acceptedLink = await acceptedFuture;
     final received = await hostMessageFuture;
     expect(received.from, 'guest-1');
     expect(received.type, MessageType.op);
@@ -78,7 +78,6 @@ void main() {
     await host.start(asHost: true, roomId: 'room-x');
 
     final raw = await Socket.connect('127.0.0.1', host.boundPort);
-    await host.incomingLinks.first;
 
     // 先以合法信封建立身份。
     raw.add(frameEnvelope(EnvelopeCodec.encode(makeEnvelope('bad-peer'))));
