@@ -152,10 +152,27 @@ class RoomPage extends ConsumerWidget {
                     ),
                   ),
                 ),
+            _syncProgress(ref),
             const Expanded(child: CanvasWorkspace()),
           ],
         ),
       ),
+    );
+  }
+
+  /// 中途加入补齐进度（task 5.3）。
+  Widget _syncProgress(WidgetRef ref) {
+    final progress = ref.read(roomControllerProvider.notifier).syncProgress;
+    if (progress == null) return const SizedBox.shrink();
+    return ValueListenableBuilder<double?>(
+      valueListenable: progress,
+      builder: (context, value, _) {
+        if (value == null) return const SizedBox.shrink();
+        return LinearProgressIndicator(
+          value: value < 0 ? null : value,
+          minHeight: 4,
+        );
+      },
     );
   }
 

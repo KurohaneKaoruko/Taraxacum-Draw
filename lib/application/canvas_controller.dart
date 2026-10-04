@@ -57,11 +57,18 @@ class CanvasUiState {
 
 /// 画布控制器：指针事件 → 笔画 → AddStrokeOp 入文档。
 ///
-/// 本阶段（task 2.1）为单机模式：clock/opId 本地生成；
-/// 进入实时同步（task 5.x）后由同步层接管广播，此处接口不变。
+/// 本地产生的每条 op 经 [onLocalOp] 回调交给同步层广播（task 5.1）；
+/// 远端 op / 快照经 [applyRemoteOp] / [adoptSnapshot] 进入同一文档。
 class CanvasController extends Notifier<CanvasUiState> {
   static const _uuid = Uuid();
   final LamportClock _clock = LamportClock();
+
+  /// 本端作者标识：加入房间时由房间控制器设为 identity.peerId，
+  /// 撤销"只作用于本人操作"的判定依赖它。单机默认 'local'。
+  String authorId = 'local';
+
+  /// 本地产生的新 op（同步层订阅后广播给房间）。
+  void Function(Op op)? onLocalOp;
 
   @override
   CanvasUiState build() => CanvasUiState(
@@ -161,12 +168,22 @@ class CanvasController extends Notifier<CanvasUiState> {
   }
 
   void _apply(Op Function(String opId, int lamport, int wallTimeMs) build) {
-    state.document.applyOp(
-      build(_uuid.v4(), _clock.tick(), DateTime.now().millisecondsSinceEpoch),
+    final op = build(
+      _uuid.v4(),
+      _clock.tick(),
+      DateTime.now().millisecondsSinceEpoch,
     );
-    state = state.copyWith(); // 新实例触发刷新
+    _applyLocal(op);
   }
 
+  void _applyLocal(Op op) {
+    state.document.applyOp(op);
+    onLocalOp?.call(op);
+    state = state.copyWith(); // 新实例触发界面刷新
+  }
+
+  /// 当前画布文档（同步层读取 log/状态用）。
+  CanvasDocument get document => state.document;
 
   /// 指针按下：开始一笔。
   void onPointerDown(double x, double y, double? pressure) {
@@ -194,7 +211,7 @@ class CanvasController extends Notifier<CanvasUiState> {
     }
     final stroke = Stroke(
       id: _uuid.v4(),
-      authorId: 'local', // task 4.1 接入真实身份
+      authorId: authorId,
       layerId: state.activeLayerId,
       tool: state.tool,
       color: state.color,
@@ -202,15 +219,13 @@ class CanvasController extends Notifier<CanvasUiState> {
       points: points,
       createdAtMs: DateTime.now().millisecondsSinceEpoch,
     );
-    state.document.applyOp(
-      AddStrokeOp(
-        opId: _uuid.v4(),
-        authorId: stroke.authorId,
-        lamport: _clock.tick(),
-        wallTimeMs: stroke.createdAtMs,
-        stroke: stroke,
-      ),
-    );
+    _apply((opId, lamport, wall) => AddStrokeOp(
+          opId: opId,
+          authorId: stroke.authorId,
+          lamport: lamport,
+          wallTimeMs: wall,
+          stroke: stroke,
+        ));
     state = state.copyWith(clearInProgress: true);
   }
 
@@ -220,7 +235,7 @@ class CanvasController extends Notifier<CanvasUiState> {
   /// 撤销自己最近一条未撤销的操作。
   void undo() {
     for (final op in state.document.log.reversed) {
-      if (op.authorId == 'local' &&
+      if (op.authorId == authorId &&
           op is! UndoOp &&
           state.document.isEffective(op.opId)) {
         _applyUndoOf(op.opId);
@@ -236,7 +251,7 @@ class CanvasController extends Notifier<CanvasUiState> {
   void redo() {
     final doc = state.document;
     for (final op in doc.log.reversed) {
-      if (op is! UndoOp || op.authorId != 'local') continue;
+      if (op is! UndoOp || op.authorId != authorId) continue;
       if (!doc.isEffective(op.opId)) continue;
 
       Op? target;
@@ -254,22 +269,32 @@ class CanvasController extends Notifier<CanvasUiState> {
   }
 
   void _applyUndoOf(String targetOpId) {
-    state.document.applyOp(
-      UndoOp(
-        opId: _uuid.v4(),
-        authorId: 'local',
-        lamport: _clock.tick(),
-        wallTimeMs: DateTime.now().millisecondsSinceEpoch,
-        undoneOpId: targetOpId,
-      ),
-    );
-    state = state.copyWith(); // 新实例触发界面刷新
+    _apply((opId, lamport, wall) => UndoOp(
+          opId: opId,
+          authorId: authorId,
+          lamport: lamport,
+          wallTimeMs: wall,
+          undoneOpId: targetOpId,
+        ));
   }
 
   /// 清空画布（保留图层结构；UI 侧需先弹确认，见 drawing-canvas 规格）。
   void clearCanvas() {
     _apply((opId, lamport, wall) =>
         ClearCanvasOp(opId: opId, authorId: 'local', lamport: lamport, wallTimeMs: wall));
+  }
+
+  /// 应用远端 op（同步层入口，task 5.1）。
+  void applyRemoteOp(Op op) {
+    _clock.merge(op.lamport);
+    state.document.applyOp(op);
+    state = state.copyWith();
+  }
+
+  /// 应用远端快照（中途加入 / 重连补齐，task 5.3/5.6）。
+  void adoptSnapshot(CanvasState snapshot) {
+    state.document.seedFromState(snapshot);
+    state = state.copyWith();
   }
 }
 

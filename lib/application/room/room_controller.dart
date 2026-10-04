@@ -1,11 +1,15 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:taraxacum_draw/application/canvas_controller.dart';
 import 'package:taraxacum_draw/application/identity.dart';
 import 'package:taraxacum_draw/application/room/room_network.dart';
 import 'package:taraxacum_draw/application/room/room_session.dart';
+import 'package:taraxacum_draw/application/sync/sync_coordinator.dart';
+import 'package:taraxacum_draw/domain/canvas_document.dart';
 import 'package:taraxacum_draw/domain/ids.dart';
 import 'package:taraxacum_draw/domain/room_state.dart';
 import 'package:taraxacum_draw/infrastructure/transport/lan_transport.dart';
@@ -74,6 +78,8 @@ class RoomController extends Notifier<RoomUiState> {
   WebRtcTransport? _webrtc;
   ManualTransport? _manual;
   RoomNetworkAdapter? _adapter;
+  SyncCoordinator? _sync;
+  bool _limitWarned = false;
 
 
   @override
@@ -328,6 +334,9 @@ class RoomController extends Notifier<RoomUiState> {
     );
   }
 
+  /// 同步补齐进度（房间页进度条）。
+  ValueNotifier<double?>? get syncProgress => _sync?.catchUpProgress;
+
   /// 首页昵称修改后刷新界面状态。
   void refreshIdentity(LocalIdentity identity) {
     state = state.copyWith(identity: identity);
@@ -343,14 +352,46 @@ class RoomController extends Notifier<RoomUiState> {
       session: session,
       transports: transports,
       onChanged: () => state = state.copyWith(session: session),
+      onPeerJoined: (peer) {
+        if (session.isHost) _sync?.sendOpLogTo(peer);
+      },
     );
     _adapter!.attach();
+    _setupSync(session.roomId, transports);
+  }
+
+  void _setupSync(RoomId roomId, List<Transport> transports) {
+    final canvas = ref.read(canvasProvider.notifier);
+    canvas.authorId = _identity.peerId;
+    // 进入新房间：以空白画布起步（历史由补齐流程填充，task 5.3）。
+    canvas.adoptSnapshot(const CanvasState(layers: [], strokesByLayer: {}));
+    _sync?.dispose();
+    _sync = SyncCoordinator(
+      selfPeerId: _identity.peerId,
+      canvas: canvas,
+      roomId: roomId,
+    );
+    _sync!.bind(transports);
+    canvas.onLocalOp = (op) {
+      _sync!.broadcastLocalOp(op);
+      if (!_limitWarned && canvas.state.document.log.length >= _sync!.opLimit) {
+        _limitWarned = true;
+        state = state.copyWith(
+          error: '操作数已达上限，建议导出画作后新建房间',
+        );
+      }
+    };
+    _limitWarned = false;
   }
 
   Future<void> _teardownTransports() async {
     await _adapter?.dispose();
     _adapter = null;
     _session = null;
+    _sync?.dispose();
+    _sync = null;
+    _limitWarned = false;
+    ref.read(canvasProvider.notifier).onLocalOp = null;
     await _lan?.stop();
     await _webrtc?.stop();
     await _manual?.stop();

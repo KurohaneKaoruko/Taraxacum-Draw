@@ -39,11 +39,15 @@ class Envelope {
     required this.seq,
     required this.lamport,
     required this.payload,
+    this.to,
   });
 
   final MessageType type;
   final RoomId roomId;
   final PeerId from;
+
+  /// 定向目标（null = 广播）。
+  final PeerId? to;
 
   /// 发送方会话内单调递增序号，接收方据此检测缺口并请求重传。
   final int seq;

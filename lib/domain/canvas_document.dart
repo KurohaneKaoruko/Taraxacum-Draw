@@ -11,6 +11,50 @@ class CanvasState {
   final List<Layer> layers;
 
   final Map<LayerId, List<Stroke>> strokesByLayer;
+
+  /// 快照序列化（中途加入/重连的快照补齐，task 5.6）。
+  Map<String, Object?> toJson() => {
+        'layers': [
+          for (final layer in layers)
+            {
+              'id': layer.id,
+              'n': layer.name,
+              'o': layer.order,
+              'v': layer.visible,
+            },
+        ],
+        'strokes': [
+          for (final entry in strokesByLayer.entries)
+            {
+              'l': entry.key,
+              's': [for (final stroke in entry.value) stroke.toJson()],
+            },
+        ],
+      };
+
+  static CanvasState fromJson(Map<Object?, Object?> json) {
+    final layers = [
+      for (final l in (json['layers'] as List? ?? []))
+        Layer(
+          id: (l as Map)['id'] as String,
+          name: (l['n'] as String?) ?? '',
+          order: ((l['o'] as num?) ?? 0).toInt(),
+          visible: (l['v'] as bool?) ?? true,
+        ),
+    ];
+    final strokesByLayer = <LayerId, List<Stroke>>{};
+    for (final group in (json['strokes'] as List? ?? [])) {
+      final map = group as Map;
+      strokesByLayer[map['l'] as String] = [
+        for (final s in (map['s'] as List? ?? []))
+          Stroke.fromJson(Map<Object?, Object?>.from(s as Map)),
+      ];
+    }
+    for (final layer in layers) {
+      strokesByLayer.putIfAbsent(layer.id, () => <Stroke>[]);
+    }
+    return CanvasState(layers: layers, strokesByLayer: strokesByLayer);
+  }
 }
 
 /// 画布文档：op-log + 派生状态（design.md D3）。
@@ -34,6 +78,7 @@ class CanvasDocument {
   }
 
   final List<Op> _log = [];
+  final Set<OpId> _seenIds = {};
   List<Layer> _layers = [];
   Map<LayerId, List<Stroke>> _strokes = {};
   int _maxLamport = 0;
@@ -53,7 +98,11 @@ class CanvasDocument {
       List.unmodifiable(_strokes[layerId] ?? const <Stroke>[]);
 
   /// 应用一条新操作（本地产生或网络接收）。
+  ///
+  /// 幂等：重复 opId（重传/补发导致）直接忽略。
   void applyOp(Op op) {
+    if (_seenIds.contains(op.opId)) return;
+    _seenIds.add(op.opId);
     final inOrder = op.lamport >= _maxLamport;
     if (op.lamport > _maxLamport) _maxLamport = op.lamport;
     _log.add(op);
@@ -68,7 +117,6 @@ class CanvasDocument {
   }
 
   /// 判断一条 op 当前是否生效。
-  ///
   /// op 失效当且仅当存在一条指向它的 UndoOp 且该 UndoOp 自身生效；
   /// 递归定义天然支持"撤销的撤销 = 重做"的嵌套链。
   bool isEffective(OpId opId) {
@@ -78,6 +126,21 @@ class CanvasDocument {
       }
     }
     return true;
+  }
+
+  /// 以快照替换当前内容（中途加入/重连的补齐路径，task 5.3/5.6）。
+  ///
+  /// 此后仅应用新到 op；快照前的历史 op 不保留，
+  /// 因此本端只能撤销自己加入之后产生的操作（符合规格的撤销语义）。
+  void seedFromState(CanvasState snapshot) {
+    _log.clear();
+    _seenIds.clear();
+    _layers = [...snapshot.layers];
+    _strokes = {
+      for (final entry in snapshot.strokesByLayer.entries)
+        entry.key: List<Stroke>.of(entry.value),
+    };
+    _version++;
   }
 
   /// 全量重放：生效 op 按 (lamport, authorId) 全序重放。

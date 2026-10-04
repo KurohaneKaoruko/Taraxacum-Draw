@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:taraxacum_draw/application/room/room_message.dart';
 import 'package:taraxacum_draw/application/room/room_session.dart';
 import 'package:taraxacum_draw/domain/envelope.dart';
+import 'package:taraxacum_draw/domain/ids.dart';
 import 'package:taraxacum_draw/domain/room_state.dart';
 import 'package:taraxacum_draw/infrastructure/transport/transport.dart';
 
@@ -17,6 +18,7 @@ class RoomNetworkAdapter {
     required this.session,
     required this.transports,
     this.onChanged,
+    this.onPeerJoined,
   });
 
   final RoomSession session;
@@ -24,6 +26,9 @@ class RoomNetworkAdapter {
 
   /// 会话状态变化后的 UI 通知。
   final void Function()? onChanged;
+
+  /// 对端加入（房主侧用于同步补齐，task 5.3）。
+  final void Function(PeerId peer)? onPeerJoined;
 
   int _seq = 0;
   final List<StreamSubscription> _subs = [];
@@ -33,7 +38,9 @@ class RoomNetworkAdapter {
     for (final transport in transports) {
       _subs.add(transport.messages.listen(_onEnvelope));
       _subs.add(transport.peerEvents.listen((event) {
-        if (event.kind != PeerEventKind.joined && session.isHost) {
+        if (event.kind == PeerEventKind.joined) {
+          onPeerJoined?.call(event.peer);
+        } else if (session.isHost) {
           session.onDisconnected(event.peer);
           flush();
         }

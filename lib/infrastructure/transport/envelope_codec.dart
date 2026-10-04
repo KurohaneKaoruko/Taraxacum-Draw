@@ -10,7 +10,8 @@ import 'package:taraxacum_draw/domain/envelope.dart';
 /// ```
 /// magic 'T''D' (2) | version (1) | flags (1) | type (1)
 /// roomIdLen (2) | roomId (utf8) | fromLen (2) | from (utf8)
-/// seq (4) | lamport (8) | payloadLen (4) | payload
+/// toLen (2) | to (utf8, 空=广播) | seq (4) | lamport (8)
+/// payloadLen (4) | payload
 /// ```
 /// flags bit0 = payload 已 zlib 压缩。
 ///
@@ -31,8 +32,9 @@ class EnvelopeCodec {
   static Uint8List encode(Envelope envelope) {
     final roomId = utf8.encode(envelope.roomId);
     final from = utf8.encode(envelope.from);
-    if (roomId.length > 0xFFFF || from.length > 0xFFFF) {
-      throw FormatException('roomId/from 过长');
+    final to = utf8.encode(envelope.to ?? '');
+    if (roomId.length > 0xFFFF || from.length > 0xFFFF || to.length > 0xFFFF) {
+      throw FormatException('roomId/from/to 过长');
     }
 
     var payload = envelope.payload;
@@ -45,10 +47,10 @@ class EnvelopeCodec {
       throw FormatException('payload 过大: ${payload.length}');
     }
 
-    // 固定头部 25 字节（magic2 + version1 + flags1 + type1 +
-    // roomIdLen2 + fromLen2 + seq4 + lamport8 + payloadLen4）；
-    // 变长的 roomId/from/payload 在头部之后按序追加。
-    const headerLength = 25;
+    // 固定头部 27 字节（magic2 + version1 + flags1 + type1 +
+    // roomIdLen2 + fromLen2 + toLen2 + seq4 + lamport8 + payloadLen4）；
+    // 变长的 roomId/from/to/payload 在头部之后按序追加。
+    const headerLength = 27;
     final result = BytesBuilder(copy: false);
     final header = ByteData(headerLength);
     var o = 0;
@@ -62,19 +64,21 @@ class EnvelopeCodec {
       ..setUint8(o, envelope.type.index)
       ..setUint16(o + 1, roomId.length, Endian.big)
       ..setUint16(o + 3, from.length, Endian.big)
-      ..setUint32(o + 5, envelope.seq, Endian.big)
-      ..setUint64(o + 9, envelope.lamport, Endian.big)
-      ..setUint32(o + 17, payload.length, Endian.big);
-    o += 21;
+      ..setUint16(o + 5, to.length, Endian.big)
+      ..setUint32(o + 7, envelope.seq, Endian.big)
+      ..setUint64(o + 11, envelope.lamport, Endian.big)
+      ..setUint32(o + 19, payload.length, Endian.big);
+    o += 23;
     result.add(header.buffer.asUint8List(0, headerLength));
     result.add(roomId);
     result.add(from);
+    result.add(to);
     result.add(payload);
     return result.toBytes();
   }
 
   static Envelope decode(Uint8List bytes) {
-    if (bytes.length < 25) {
+    if (bytes.length < 27) {
       throw const FormatException('帧过短');
     }
     final data = ByteData.sublistView(bytes);
@@ -90,22 +94,26 @@ class EnvelopeCodec {
       throw FormatException('未知消息类型: $typeIndex');
     }
 
-    // 与 encode 相同：从 magic 起算的固定头部共 25 字节。
+    // 与 encode 相同：从 magic 起算的固定头部共 27 字节。
     var o = 4;
     final roomIdLength = data.getUint16(o + 1, Endian.big);
     final fromLength = data.getUint16(o + 3, Endian.big);
-    final seq = data.getUint32(o + 5, Endian.big);
-    final lamport = data.getUint64(o + 9, Endian.big);
-    final payloadLength = data.getUint32(o + 17, Endian.big);
-    o += 21;
+    final toLength = data.getUint16(o + 5, Endian.big);
+    final seq = data.getUint32(o + 7, Endian.big);
+    final lamport = data.getUint64(o + 11, Endian.big);
+    final payloadLength = data.getUint32(o + 19, Endian.big);
+    o += 23;
 
-    if (o + roomIdLength + fromLength + payloadLength > bytes.length) {
+    if (o + roomIdLength + fromLength + toLength + payloadLength >
+        bytes.length) {
       throw const FormatException('长度字段与实际数据不符');
     }
     final roomId = utf8.decode(bytes.sublist(o, o + roomIdLength));
     o += roomIdLength;
     final from = utf8.decode(bytes.sublist(o, o + fromLength));
     o += fromLength;
+    final toRaw = utf8.decode(bytes.sublist(o, o + toLength));
+    o += toLength;
 
     var payload = Uint8List.sublistView(bytes, o, o + payloadLength);
     if (flags & flagCompressed != 0) {
@@ -116,6 +124,7 @@ class EnvelopeCodec {
       type: MessageType.values[typeIndex],
       roomId: roomId,
       from: from,
+      to: toRaw.isEmpty ? null : toRaw,
       seq: seq,
       lamport: lamport,
       payload: payload,

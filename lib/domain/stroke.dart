@@ -56,4 +56,40 @@ class Stroke {
   final int createdAtMs;
 
   int get length => points.length;
+
+  Map<String, Object?> toJson() => {
+        'id': id,
+        'a': authorId,
+        'l': layerId,
+        't': tool.index,
+        'c': color,
+        'w': width,
+        'pts': [
+          for (final p in points) ...[p.x, p.y, p.pressure ?? 0.0],
+        ],
+        'ms': createdAtMs,
+      };
+
+  static Stroke fromJson(Map<Object?, Object?> json) {
+    final flat = (json['pts'] as List? ?? []).cast<num>();
+    final points = <StrokePoint>[];
+    for (var i = 0; i + 2 < flat.length; i += 3) {
+      final pressure = flat[i + 2].toDouble();
+      points.add(StrokePoint(
+        x: flat[i].toDouble(),
+        y: flat[i + 1].toDouble(),
+        pressure: pressure == 0 ? null : pressure,
+      ));
+    }
+    return Stroke(
+      id: json['id'] as String,
+      authorId: json['a'] as String? ?? 'unknown',
+      layerId: json['l'] as String,
+      tool: DrawTool.values[((json['t'] as num?) ?? 0).toInt().clamp(0, 1)],
+      color: ((json['c'] as num?) ?? 0xFF000000).toInt(),
+      width: ((json['w'] as num?) ?? 2).toDouble(),
+      points: points,
+      createdAtMs: ((json['ms'] as num?) ?? 0).toInt(),
+    );
+  }
 }
