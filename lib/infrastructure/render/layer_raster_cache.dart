@@ -40,7 +40,10 @@ class LayerRasterCache {
   /// 当前缓存的所有图层 id（用于比对文档，回收已删除图层的缓存）。
   Iterable<String> get keys => _entries.keys;
 
-  ui.Picture _record(List<Stroke> strokes) {
+  ui.Picture _record(List<Stroke> strokes) => recordStrokes(strokes);
+
+  /// 将一组笔迹录制为离屏画面（缓存与 PNG 导出共用）。
+  static ui.Picture recordStrokes(List<Stroke> strokes) {
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
     for (final stroke in strokes) {

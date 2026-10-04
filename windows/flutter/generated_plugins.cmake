@@ -4,7 +4,9 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   bonsoir_windows
+  file_selector_windows
   flutter_webrtc
+  gal
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

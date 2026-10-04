@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:taraxacum_draw/application/canvas_controller.dart';
 import 'package:taraxacum_draw/application/view_transform.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
+import 'package:taraxacum_draw/infrastructure/export/png_exporter.dart';
+import 'package:taraxacum_draw/infrastructure/export/png_saver.dart';
 import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
 import 'package:taraxacum_draw/presentation/canvas/document_painter.dart';
 import 'package:taraxacum_draw/presentation/canvas/layer_panel.dart';
@@ -60,6 +62,11 @@ class CanvasPage extends ConsumerWidget {
             icon: const Icon(Icons.delete_sweep),
             onPressed: () => _confirmClear(context, controller),
           ),
+          IconButton(
+            tooltip: '导出 PNG',
+            icon: const Icon(Icons.file_download),
+            onPressed: () => _exportPng(context, ref),
+          ),
         ],
       ),
       body: Column(
@@ -68,12 +75,35 @@ class CanvasPage extends ConsumerWidget {
           const Divider(height: 1),
           Expanded(
             child: ClipRect(
-              child: _CanvasInputArea(cache: cache),
+              child: _CanvasInputArea(cache: cache, canvasKey: _canvasKey),
             ),
           ),
         ],
       ),
     );
+  }
+
+  static final GlobalKey _canvasKey = GlobalKey();
+
+  /// 导出当前视口为 PNG 并按平台保存。
+  Future<void> _exportPng(BuildContext context, WidgetRef ref) async {
+    final viewportSize = _canvasKey.currentContext?.size;
+    if (viewportSize == null) return;
+    final ui = ref.read(canvasProvider);
+
+    // 在异步间隙前捕获，避免使用已卸载的 context。
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await PngExporter.export(
+        state: ui.document.state,
+        view: ui.view,
+        viewport: viewportSize,
+      );
+      final message = await savePng(bytes);
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('导出失败：$error')));
+    }
   }
 
   static String _activeLayerName(CanvasUiState ui) {
@@ -110,9 +140,10 @@ class CanvasPage extends ConsumerWidget {
 /// 绘画输入区：单指/鼠标左键绘制，双指捏合缩放+平移，
 /// 滚轮缩放，空格/中键拖拽平移。
 class _CanvasInputArea extends ConsumerStatefulWidget {
-  const _CanvasInputArea({required this.cache});
+  const _CanvasInputArea({required this.cache, required this.canvasKey});
 
   final LayerRasterCache cache;
+  final GlobalKey canvasKey;
 
   @override
   ConsumerState<_CanvasInputArea> createState() => _CanvasInputAreaState();
@@ -249,7 +280,9 @@ class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
   @override
   Widget build(BuildContext context) {
     final ui = ref.watch(canvasProvider);
-    return Listener(
+    return KeyedSubtree(
+      key: widget.canvasKey,
+      child: Listener(
       behavior: HitTestBehavior.opaque,
       onPointerDown: _onDown,
       onPointerMove: _onMove,
@@ -264,6 +297,7 @@ class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
           view: ui.view,
           activeStroke: _activeStrokeOf(ui),
         ),
+      ),
       ),
     );
   }

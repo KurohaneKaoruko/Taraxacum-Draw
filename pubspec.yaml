@@ -42,6 +42,8 @@ dependencies:
   cbor: ^6.5.1
   uuid: ^4.6.0
   shared_preferences: ^2.5.5
+  file_selector: ^1.1.0
+  gal: ^2.3.3
 
 dev_dependencies:
   flutter_test:
