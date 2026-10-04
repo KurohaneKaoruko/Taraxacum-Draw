@@ -20,6 +20,7 @@ class RoomNetworkAdapter {
     this.onChanged,
     this.onPeerJoined,
     this.onHostLost,
+    this.onPeerLeft,
   });
 
   final RoomSession session;
@@ -34,6 +35,9 @@ class RoomNetworkAdapter {
   /// 成员侧检测到房主失联（触发自动重连，task 5.4）。
   final void Function(PeerId peer)? onHostLost;
 
+  /// 任一对端离开/失联（协作层清理光标等，task 6.1）。
+  final void Function(PeerId peer)? onPeerLeft;
+
   int _seq = 0;
   final List<StreamSubscription> _subs = [];
 
@@ -44,12 +48,15 @@ class RoomNetworkAdapter {
       _subs.add(transport.peerEvents.listen((event) {
         if (event.kind == PeerEventKind.joined) {
           onPeerJoined?.call(event.peer);
-        } else if (session.isHost) {
-          session.onDisconnected(event.peer);
+        } else {
+          if (session.isHost) {
+            session.onDisconnected(event.peer);
+          } else if (event.peer == session.hostPeerId) {
+            // 成员侧：房主失联 → 触发自动重连（task 5.4）。
+            onHostLost?.call(event.peer);
+          }
+          onPeerLeft?.call(event.peer);
           flush();
-        } else if (event.peer == session.hostPeerId) {
-          // 成员侧：房主失联 → 触发自动重连（task 5.4）。
-          onHostLost?.call(event.peer);
         }
       }));
     }

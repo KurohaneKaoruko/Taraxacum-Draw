@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:taraxacum_draw/application/canvas_controller.dart';
+import 'package:taraxacum_draw/application/presence/presence_controller.dart';
+import 'package:taraxacum_draw/application/room/room_controller.dart';
 import 'package:taraxacum_draw/application/view_transform.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
 import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
@@ -106,10 +108,25 @@ class CanvasWorkspace extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final ui = ref.watch(canvasProvider);
     final controller = ref.read(canvasProvider.notifier);
+    final presence = ref.watch(presenceProvider);
 
     return Column(
       children: [
-        _ToolBar(ui: ui, controller: controller),
+        Row(
+          children: [
+            _ToolBar(ui: ui, controller: controller),
+            const Spacer(),
+            IconButton(
+              tooltip: presence.showRemoteCursors ? '隐藏他人光标' : '显示他人光标',
+              isSelected: presence.showRemoteCursors,
+              icon: const Icon(Icons.mouse),
+              onPressed: () => ref
+                  .read(presenceProvider.notifier)
+                  .toggleRemoteCursors(),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ),
         const Divider(height: 1),
         Expanded(
           child: ClipRect(
@@ -189,6 +206,7 @@ class _CanvasInputAreaState extends ConsumerState<CanvasInputArea> {
 
   void _onDown(PointerDownEvent event) {
     _pointers[event.pointer] = event.localPosition;
+    _feedPresence(_view.toCanvas(event.localPosition));
 
     if (_pointers.length == 2) {
       // 第二根手指落下：进入双指导航，丢弃进行中笔画。
@@ -252,6 +270,7 @@ class _CanvasInputAreaState extends ConsumerState<CanvasInputArea> {
         _naturalPressure(event.pressure),
       );
     }
+    _feedPresence(_view.toCanvas(event.localPosition));
   }
 
   void _onUp(PointerEvent event) {
@@ -282,6 +301,24 @@ class _CanvasInputAreaState extends ConsumerState<CanvasInputArea> {
     }
   }
 
+  /// 本端指针位置 → 协作层（节流后广播给房间成员）。
+  void _feedPresence(Offset canvasPos) {
+    final room = ref.read(roomControllerProvider);
+    final identity = room.identity;
+    if (identity == null) return;
+    ref.read(presenceProvider.notifier).onLocalPointer(
+          selfPeerId: identity.peerId,
+          selfName: identity.name,
+          selfColor: identity.color,
+          x: canvasPos.dx,
+          y: canvasPos.dy,
+        );
+  }
+
+  void _onHover(PointerHoverEvent event) {
+    _feedPresence(_view.toCanvas(event.localPosition));
+  }
+
   static Offset _midOf(Iterable<Offset> points) {
     final list = points.toList();
     return Offset(
@@ -303,12 +340,14 @@ class _CanvasInputAreaState extends ConsumerState<CanvasInputArea> {
   @override
   Widget build(BuildContext context) {
     final ui = ref.watch(canvasProvider);
+    final presence = ref.watch(presenceProvider);
     return KeyedSubtree(
       key: widget.canvasKey,
       child: Listener(
         behavior: HitTestBehavior.opaque,
         onPointerDown: _onDown,
         onPointerMove: _onMove,
+        onPointerHover: _onHover,
         onPointerUp: _onUp,
         onPointerCancel: _onUp,
         onPointerSignal: _onSignal,
@@ -319,6 +358,9 @@ class _CanvasInputAreaState extends ConsumerState<CanvasInputArea> {
             state: ui.document.state,
             view: ui.view,
             activeStroke: _activeStrokeOf(ui),
+            cursors: presence.showRemoteCursors
+                ? presence.cursors.values.toList()
+                : const [],
           ),
         ),
       ),

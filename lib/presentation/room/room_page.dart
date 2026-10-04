@@ -7,6 +7,7 @@ import 'package:taraxacum_draw/infrastructure/transport/transport.dart';
 import 'package:taraxacum_draw/presentation/canvas/canvas_view.dart';
 import 'package:taraxacum_draw/presentation/canvas/layer_panel.dart';
 import 'package:taraxacum_draw/presentation/home/home_page.dart';
+import 'package:taraxacum_draw/presentation/room/chat_panel.dart';
 import 'package:taraxacum_draw/presentation/room/invite_qr_view.dart';
 import 'package:taraxacum_draw/presentation/room/invite_scan_view.dart';
 
@@ -69,6 +70,17 @@ class RoomPage extends ConsumerWidget {
                 onPressed: () => controller
                     .setApprovalRequired(!session.state.approvalRequired),
               ),
+            IconButton(
+              tooltip: '聊天',
+              icon: Badge(
+                isLabelVisible: false,
+                child: const Icon(Icons.chat_bubble_outline),
+              ),
+              onPressed: () => showModalBottomSheet(
+                context: context,
+                builder: (_) => const ChatPanel(),
+              ),
+            ),
             IconButton(
               tooltip: '邀请',
               icon: const Icon(Icons.qr_code),

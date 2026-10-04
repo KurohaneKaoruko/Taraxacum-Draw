@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import 'package:taraxacum_draw/application/canvas_controller.dart';
 import 'package:taraxacum_draw/application/identity.dart';
+import 'package:taraxacum_draw/application/presence/presence_controller.dart';
 import 'package:taraxacum_draw/application/room/reconnect_loop.dart';
 import 'package:taraxacum_draw/application/room/room_network.dart';
 import 'package:taraxacum_draw/application/room/room_session.dart';
@@ -380,8 +381,15 @@ class RoomController extends Notifier<RoomUiState> {
         if (session.isHost) _sync?.sendOpLogTo(peer);
       },
       onHostLost: (peer) => _startReconnect(),
+      onPeerLeft: (peer) =>
+          ref.read(presenceProvider.notifier).removePeer(peer),
     );
     _adapter!.attach();
+
+    final presence = ref.read(presenceProvider.notifier);
+    presence.configure(selfPeerId: _identity.peerId, roomId: session.roomId);
+    presence.bind(transports);
+
     _setupSync(session.roomId, transports);
   }
 
@@ -501,6 +509,7 @@ class RoomController extends Notifier<RoomUiState> {
     _joinedRoomId = null;
     _lastInvite = null;
     ref.read(canvasProvider.notifier).onLocalOp = null;
+    ref.read(presenceProvider.notifier).unbind();
     await _lan?.stop();
     await _webrtc?.stop();
     await _manual?.stop();
