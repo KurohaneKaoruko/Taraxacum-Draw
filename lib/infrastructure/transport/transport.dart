@@ -72,6 +72,9 @@ abstract class PeerLink {
   /// 关闭链路。[reason] 决定对端看到的事件语义（left/lost）。
   Future<void> close([PeerEventKind reason = PeerEventKind.left]);
 
+  /// 链路结束时完成，值为结束方式（left/lost）。实现必须保证完成。
+  Future<PeerEventKind> get closed;
+
   bool get isOpen;
 }
 
@@ -138,4 +141,37 @@ abstract class Transport {
 
   /// 实现侧自动发现的房间（LAN mDNS；其他实现为空流）。
   Stream<DiscoveredRoom> get discoveredRooms => const Stream.empty();
+
+  // ===== 网状发送（房间层使用；实现类经 [trackLink] 登记链路）=====
+
+  final List<PeerLink> trackedLinks = [];
+
+  /// 实现类在接受/拨号链路后登记；关闭时自动摘除。
+  void trackLink(PeerLink link) {
+    trackedLinks.add(link);
+    link.closed.then((_) => trackedLinks.remove(link));
+  }
+
+  /// 广播信封给本传输的全部链路（单条失败不影响其余）。
+  Future<void> broadcast(Envelope envelope) async {
+    for (final link in List.of(trackedLinks)) {
+      if (!link.isOpen) continue;
+      try {
+        await link.send(envelope);
+      } catch (_) {}
+    }
+  }
+
+  /// 定向发送；返回是否有可达链路。
+  Future<bool> sendTo(Envelope envelope, PeerId peer) async {
+    var sent = false;
+    for (final link in List.of(trackedLinks)) {
+      if (!link.isOpen || link.remotePeer != peer) continue;
+      try {
+        await link.send(envelope);
+        sent = true;
+      } catch (_) {}
+    }
+    return sent;
+  }
 }

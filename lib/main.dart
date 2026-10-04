@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:taraxacum_draw/presentation/canvas/canvas_view.dart';
+import 'package:taraxacum_draw/presentation/home/home_page.dart';
 
 void main() {
   runApp(const ProviderScope(child: TaraxacumDrawApp()));
@@ -27,7 +27,7 @@ class TaraxacumDrawApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const CanvasPage(),
+      home: const HomePage(),
     );
   }
 }

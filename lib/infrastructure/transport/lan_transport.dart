@@ -32,6 +32,7 @@ class LanPeerLink extends PeerLink {
   bool _open = true;
 
   /// 链路结束时完成，值为结束方式（left=正常关闭 / lost=异常断开）。
+  @override
   Future<PeerEventKind> get closed => _closed.future;
 
   @override
@@ -176,8 +177,7 @@ class LanTransport extends Transport {
           publishIncomingLink(link);
         },
         onError: (Object _) {},
-      );
-      if (enableMdns) await _register(roomId);
+      );      if (enableMdns) await _register(roomId);
     } else if (enableMdns) {
       await _startDiscovery();
     }
@@ -215,6 +215,7 @@ class LanTransport extends Transport {
   }
 
   void _attach(LanPeerLink link) {
+    trackLink(link);
     link.messages.listen((envelope) {
       final peer = link.remotePeer;
       if (peer != 'unknown' && !_links.containsKey(peer)) {

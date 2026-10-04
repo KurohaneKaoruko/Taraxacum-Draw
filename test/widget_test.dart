@@ -5,8 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:taraxacum_draw/main.dart';
 
 void main() {
-  testWidgets('应用启动并进入画布页', (tester) async {
+  testWidgets('应用启动并进入首页', (tester) async {
     await tester.pumpWidget(const ProviderScope(child: TaraxacumDrawApp()));
-    expect(find.byKey(const Key('canvas_page')), findsOneWidget);
+    await tester.pump();
+    expect(find.byKey(const Key('home_page')), findsOneWidget);
   });
 }

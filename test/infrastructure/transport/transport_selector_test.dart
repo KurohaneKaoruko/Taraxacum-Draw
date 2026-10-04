@@ -21,6 +21,9 @@ class _FakeLink extends PeerLink {
   Future<void> send(Envelope message) async {}
 
   @override
+  Future<PeerEventKind> get closed => Completer<PeerEventKind>().future;
+
+  @override
   Future<void> close([PeerEventKind reason = PeerEventKind.left]) async {}
 }
 

@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,9 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:taraxacum_draw/application/canvas_controller.dart';
 import 'package:taraxacum_draw/application/view_transform.dart';
 import 'package:taraxacum_draw/domain/stroke.dart';
+import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
 import 'package:taraxacum_draw/infrastructure/export/png_exporter.dart';
 import 'package:taraxacum_draw/infrastructure/export/png_saver.dart';
-import 'package:taraxacum_draw/infrastructure/render/layer_raster_cache.dart';
 import 'package:taraxacum_draw/presentation/canvas/document_painter.dart';
 import 'package:taraxacum_draw/presentation/canvas/layer_panel.dart';
 
@@ -24,97 +23,44 @@ const _presetColors = <int>[
   0xFF8E24AA,
 ];
 
-/// 画布页面：工具栏 + 绘画区域。
-class CanvasPage extends ConsumerWidget {
-  const CanvasPage({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final ui = ref.watch(canvasProvider);
-    final controller = ref.read(canvasProvider.notifier);
-    final cache = ref.watch(_cacheProvider);
-
-    return Scaffold(
-      key: const Key('canvas_page'),
-      appBar: AppBar(
-        title: const Text('TaraxacumDraw'),
-        actions: [
-          TextButton.icon(
-            onPressed: () => showModalBottomSheet(
-              context: context,
-              builder: (_) => const LayerPanel(),
-            ),
-            icon: const Icon(Icons.layers),
-            label: Text(_activeLayerName(ui)),
-          ),
-          IconButton(
-            tooltip: '撤销',
-            icon: const Icon(Icons.undo),
-            onPressed: controller.undo,
-          ),
-          IconButton(
-            tooltip: '重做',
-            icon: const Icon(Icons.redo),
-            onPressed: controller.redo,
-          ),
-          IconButton(
-            tooltip: '清空画布',
-            icon: const Icon(Icons.delete_sweep),
-            onPressed: () => _confirmClear(context, controller),
-          ),
-          IconButton(
-            tooltip: '导出 PNG',
-            icon: const Icon(Icons.file_download),
-            onPressed: () => _exportPng(context, ref),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _ToolBar(ui: ui, controller: controller),
-          const Divider(height: 1),
-          Expanded(
-            child: ClipRect(
-              child: _CanvasInputArea(cache: cache, canvasKey: _canvasKey),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+/// 画布工作区：绘画工具栏 + 输入区（不含脚手架，供独立页与房间页复用）。
+class CanvasWorkspace extends ConsumerWidget {
+  const CanvasWorkspace({super.key});
 
   static final GlobalKey _canvasKey = GlobalKey();
 
-  /// 导出当前视口为 PNG 并按平台保存。
-  Future<void> _exportPng(BuildContext context, WidgetRef ref) async {
-    final viewportSize = _canvasKey.currentContext?.size;
-    if (viewportSize == null) return;
-    final ui = ref.read(canvasProvider);
-
-    // 在异步间隙前捕获，避免使用已卸载的 context。
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final bytes = await PngExporter.export(
-        state: ui.document.state,
-        view: ui.view,
-        viewport: viewportSize,
-      );
-      final message = await savePng(bytes);
-      messenger.showSnackBar(SnackBar(content: Text(message)));
-    } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text('导出失败：$error')));
-    }
-  }
-
-  static String _activeLayerName(CanvasUiState ui) {
-    for (final layer in ui.document.state.layers) {
-      if (layer.id == ui.activeLayerId) return layer.name;
-    }
-    return '图层';
+  /// 画布相关操作按钮（由宿主页放入 AppBar）。
+  static List<Widget> appBarActions(
+    BuildContext context,
+    WidgetRef ref,
+  ) {
+    final controller = ref.read(canvasProvider.notifier);
+    return [
+      IconButton(
+        tooltip: '撤销',
+        icon: const Icon(Icons.undo),
+        onPressed: controller.undo,
+      ),
+      IconButton(
+        tooltip: '重做',
+        icon: const Icon(Icons.redo),
+        onPressed: controller.redo,
+      ),
+      IconButton(
+        tooltip: '清空画布',
+        icon: const Icon(Icons.delete_sweep),
+        onPressed: () => _confirmClear(context, controller),
+      ),
+      IconButton(
+        tooltip: '导出 PNG',
+        icon: const Icon(Icons.file_download),
+        onPressed: () => _exportPng(context, ref),
+      ),
+    ];
   }
 
   /// 清空前确认（drawing-canvas 规格要求）。
-  Future<void> _confirmClear(
+  static Future<void> _confirmClear(
       BuildContext context, CanvasController controller) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -135,30 +81,105 @@ class CanvasPage extends ConsumerWidget {
     );
     if (confirmed == true) controller.clearCanvas();
   }
+
+  /// 导出当前视口为 PNG 并按平台保存。
+  static Future<void> _exportPng(BuildContext context, WidgetRef ref) async {
+    final viewportSize = _canvasKey.currentContext?.size;
+    if (viewportSize == null) return;
+    final ui = ref.read(canvasProvider);
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await PngExporter.export(
+        state: ui.document.state,
+        view: ui.view,
+        viewport: viewportSize,
+      );
+      final message = await savePng(bytes);
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('导出失败：$error')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ui = ref.watch(canvasProvider);
+    final controller = ref.read(canvasProvider.notifier);
+
+    return Column(
+      children: [
+        _ToolBar(ui: ui, controller: controller),
+        const Divider(height: 1),
+        Expanded(
+          child: ClipRect(
+            child: CanvasInputArea(canvasKey: _canvasKey),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 画布页（独立运行用；房间页内嵌 [CanvasWorkspace]）。
+class CanvasPage extends ConsumerWidget {
+  const CanvasPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      key: const Key('canvas_page'),
+      appBar: AppBar(
+        title: const Text('TaraxacumDraw'),
+        actions: [
+          TextButton.icon(
+            onPressed: () => showModalBottomSheet(
+              context: context,
+              builder: (_) => const LayerPanel(),
+            ),
+            icon: const Icon(Icons.layers),
+            label: Consumer(builder: (context, ref, _) {
+              final ui = ref.watch(canvasProvider);
+              return Text(_activeLayerName(ui));
+            }),
+          ),
+          ...CanvasWorkspace.appBarActions(context, ref),
+        ],
+      ),
+      body: const CanvasWorkspace(),
+    );
+  }
+
+  static String _activeLayerName(CanvasUiState ui) {
+    for (final layer in ui.document.state.layers) {
+      if (layer.id == ui.activeLayerId) return layer.name;
+    }
+    return '图层';
+  }
 }
 
 /// 绘画输入区：单指/鼠标左键绘制，双指捏合缩放+平移，
 /// 滚轮缩放，空格/中键拖拽平移。
-class _CanvasInputArea extends ConsumerStatefulWidget {
-  const _CanvasInputArea({required this.cache, required this.canvasKey});
+class CanvasInputArea extends ConsumerStatefulWidget {
+  const CanvasInputArea({super.key, this.canvasKey});
 
-  final LayerRasterCache cache;
-  final GlobalKey canvasKey;
+  /// 宿主页用于读取视口尺寸（导出 PNG）。
+  final GlobalKey? canvasKey;
 
   @override
-  ConsumerState<_CanvasInputArea> createState() => _CanvasInputAreaState();
+  ConsumerState<CanvasInputArea> createState() => _CanvasInputAreaState();
 }
 
-class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
+class _CanvasInputAreaState extends ConsumerState<CanvasInputArea> {
   final Map<int, Offset> _pointers = {};
   bool _navigating = false; // 双指手势进行中
   bool _panning = false; // 空格/中键拖拽
   Offset? _panLast;
   Offset? _pinchLastMid;
   double? _pinchLastDist;
+  late final LayerRasterCache _cache = LayerRasterCache();
 
-  CanvasController get _controller =>
-      ref.read(canvasProvider.notifier);
+  CanvasController get _controller => ref.read(canvasProvider.notifier);
 
   ViewTransform get _view => ref.read(canvasProvider).view;
 
@@ -202,7 +223,9 @@ class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
       if (_pointers.length >= 2) {
         final mid = _midOf(_pointers.values);
         final dist = _distOf(_pointers.values);
-        if (_pinchLastDist != null && _pinchLastDist! > 0 && _pinchLastMid != null) {
+        if (_pinchLastDist != null &&
+            _pinchLastDist! > 0 &&
+            _pinchLastMid != null) {
           var t = _view.zoomAt(mid, dist / _pinchLastDist!);
           t = t.panBy(mid - _pinchLastMid!);
           _controller.setView(t);
@@ -283,21 +306,21 @@ class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
     return KeyedSubtree(
       key: widget.canvasKey,
       child: Listener(
-      behavior: HitTestBehavior.opaque,
-      onPointerDown: _onDown,
-      onPointerMove: _onMove,
-      onPointerUp: _onUp,
-      onPointerCancel: _onUp,
-      onPointerSignal: _onSignal,
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: DocumentPainter(
-          cache: widget.cache,
-          state: ui.document.state,
-          view: ui.view,
-          activeStroke: _activeStrokeOf(ui),
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _onDown,
+        onPointerMove: _onMove,
+        onPointerUp: _onUp,
+        onPointerCancel: _onUp,
+        onPointerSignal: _onSignal,
+        child: CustomPaint(
+          size: Size.infinite,
+          painter: DocumentPainter(
+            cache: _cache,
+            state: ui.document.state,
+            view: ui.view,
+            activeStroke: _activeStrokeOf(ui),
+          ),
         ),
-      ),
       ),
     );
   }
@@ -317,9 +340,6 @@ class _CanvasInputAreaState extends ConsumerState<_CanvasInputArea> {
     );
   }
 }
-
-/// 缓存实例与界面同生命周期。
-final _cacheProvider = Provider<LayerRasterCache>((ref) => LayerRasterCache());
 
 class _ToolBar extends StatelessWidget {
   const _ToolBar({required this.ui, required this.controller});
@@ -394,8 +414,9 @@ class _ColorDot extends StatelessWidget {
             color: Color(color),
             shape: BoxShape.circle,
             border: Border.all(
-              color:
-                  selected ? Theme.of(context).colorScheme.primary : Colors.white,
+              color: selected
+                  ? Theme.of(context).colorScheme.primary
+                  : Colors.white,
               width: selected ? 3 : 1,
             ),
           ),

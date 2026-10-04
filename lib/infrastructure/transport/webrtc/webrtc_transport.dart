@@ -63,6 +63,7 @@ class WebRtcPeerLink extends PeerLink {
   @override
   Stream<Envelope> get messages => _messages.stream;
 
+  @override
   Future<PeerEventKind> get closed => _closed.future;
 
   @override
@@ -302,6 +303,7 @@ class WebRtcTransport extends Transport {
   }
 
   void _registerLink(WebRtcPeerLink link) {
+    trackLink(link);
     final peer = link.remotePeer;
     _links[peer] = link;
     _peerEvents.add(PeerEvent(peer: peer, kind: PeerEventKind.joined));
