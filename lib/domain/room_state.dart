@@ -85,6 +85,14 @@ class RoomState {
 
   RoomRole? roleOf(PeerId peer) => members[peer]?.role;
 
+  /// 当前房主（成员侧随快照更新；房主侧即本端）。
+  PeerId? get hostPeerId {
+    for (final member in members.values) {
+      if (member.role == RoomRole.host) return member.peerId;
+    }
+    return null;
+  }
+
   /// 是否允许该成员绘画（只读控制）。
   bool canDraw(PeerId peer) => members[peer]?.role != RoomRole.readOnly;
 

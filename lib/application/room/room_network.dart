@@ -19,6 +19,7 @@ class RoomNetworkAdapter {
     required this.transports,
     this.onChanged,
     this.onPeerJoined,
+    this.onHostLost,
   });
 
   final RoomSession session;
@@ -29,6 +30,9 @@ class RoomNetworkAdapter {
 
   /// 对端加入（房主侧用于同步补齐，task 5.3）。
   final void Function(PeerId peer)? onPeerJoined;
+
+  /// 成员侧检测到房主失联（触发自动重连，task 5.4）。
+  final void Function(PeerId peer)? onHostLost;
 
   int _seq = 0;
   final List<StreamSubscription> _subs = [];
@@ -43,6 +47,9 @@ class RoomNetworkAdapter {
         } else if (session.isHost) {
           session.onDisconnected(event.peer);
           flush();
+        } else if (event.peer == session.hostPeerId) {
+          // 成员侧：房主失联 → 触发自动重连（task 5.4）。
+          onHostLost?.call(event.peer);
         }
       }));
     }

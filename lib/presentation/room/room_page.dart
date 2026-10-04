@@ -153,6 +153,32 @@ class RoomPage extends ConsumerWidget {
                   ),
                 ),
             _syncProgress(ref),
+            if (ui.reconnecting)
+              const Material(
+                color: Colors.orange,
+                child: ListTile(
+                  dense: true,
+                  leading: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  title: Text('连接中断，正在重连…'),
+                ),
+              ),
+            if (ui.reconnectFailed)
+              Material(
+                color: Colors.red.shade300,
+                child: ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.wifi_off),
+                  title: const Text('重连失败，请重新加入房间'),
+                  trailing: FilledButton(
+                    onPressed: () => controller.rejoinAfterFailure(),
+                    child: const Text('重新加入'),
+                  ),
+                ),
+              ),
             const Expanded(child: CanvasWorkspace()),
           ],
         ),

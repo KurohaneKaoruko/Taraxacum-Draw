@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import 'package:taraxacum_draw/application/canvas_controller.dart';
 import 'package:taraxacum_draw/application/identity.dart';
+import 'package:taraxacum_draw/application/room/reconnect_loop.dart';
 import 'package:taraxacum_draw/application/room/room_network.dart';
 import 'package:taraxacum_draw/application/room/room_session.dart';
 import 'package:taraxacum_draw/application/sync/sync_coordinator.dart';
@@ -29,6 +30,8 @@ class RoomUiState {
     this.session,
     this.activeMode,
     this.needsManual = false,
+    this.reconnecting = false,
+    this.reconnectFailed = false,
     this.error,
   });
 
@@ -41,6 +44,12 @@ class RoomUiState {
 
   /// 自动加入失败，需走手动邀请码流程。
   final bool needsManual;
+
+  /// 与房主失联，自动重连进行中（task 5.4）。
+  final bool reconnecting;
+
+  /// 重连窗口耗尽：提示手动重新加入（task 5.4）。
+  final bool reconnectFailed;
   final String? error;
 
   RoomUiState copyWith({
@@ -49,6 +58,8 @@ class RoomUiState {
     RoomSession? session,
     ConnectionMode? activeMode,
     bool? needsManual,
+    bool? reconnecting,
+    bool? reconnectFailed,
     String? error,
     bool clearError = false,
   }) =>
@@ -58,6 +69,8 @@ class RoomUiState {
         session: session ?? this.session,
         activeMode: activeMode ?? this.activeMode,
         needsManual: needsManual ?? this.needsManual,
+        reconnecting: reconnecting ?? this.reconnecting,
+        reconnectFailed: reconnectFailed ?? this.reconnectFailed,
         error: clearError ? null : (error ?? this.error),
       );
 }
@@ -80,6 +93,10 @@ class RoomController extends Notifier<RoomUiState> {
   RoomNetworkAdapter? _adapter;
   SyncCoordinator? _sync;
   bool _limitWarned = false;
+  bool _reconnecting = false;
+  RoomId? _joinedRoomId;
+  InvitePayload? _lastInvite;
+  String _roomKey = '';
 
 
   @override
@@ -102,6 +119,8 @@ class RoomController extends Notifier<RoomUiState> {
     if (state.stage != RoomStage.idle) return;
     state = state.copyWith(stage: RoomStage.connecting, clearError: true);
     final roomId = _uuid.v4().substring(0, 8);
+    _joinedRoomId = roomId;
+    _roomKey = roomId;
     try {
       final lan = LanTransport(selfPeer: _identity.peerId);
       final manual = ManualTransport(selfPeer: _identity.peerId);
@@ -152,6 +171,8 @@ class RoomController extends Notifier<RoomUiState> {
 
   Future<void> _joinAuto(RoomId roomId, {required String roomKey}) async {
     if (state.stage != RoomStage.idle) return;
+    _joinedRoomId = roomId;
+    _roomKey = roomKey;
     state = state.copyWith(stage: RoomStage.connecting, clearError: true);
 
     final lan = LanTransport(selfPeer: _identity.peerId);
@@ -247,6 +268,9 @@ class RoomController extends Notifier<RoomUiState> {
     if (state.stage != RoomStage.idle && state.stage != RoomStage.needsManual) {
       return;
     }
+    _joinedRoomId = payload.roomId;
+    _lastInvite = payload;
+    _roomKey = payload.roomId;
     state = state.copyWith(stage: RoomStage.connecting, clearError: true);
     final manual = _manual ?? ManualTransport(selfPeer: _identity.peerId);
     _manual = manual;
@@ -355,9 +379,92 @@ class RoomController extends Notifier<RoomUiState> {
       onPeerJoined: (peer) {
         if (session.isHost) _sync?.sendOpLogTo(peer);
       },
+      onHostLost: (peer) => _startReconnect(),
     );
     _adapter!.attach();
     _setupSync(session.roomId, transports);
+  }
+
+  // ===== 断线自动重连（task 5.4）=====
+
+  /// 成员侧检测到房主失联：窗口内自动重连，超时提示手动重新加入。
+  Future<void> _startReconnect() async {
+    if (_reconnecting || state.stage != RoomStage.inRoom || _session == null) {
+      return;
+    }
+    _reconnecting = true;
+    state = state.copyWith(reconnecting: true);
+
+    final loop = ReconnectLoop(
+      attempt: _retryEstablishLink,
+      retryDelay: const Duration(seconds: 2),
+      window: const Duration(seconds: 30),
+    );
+    final ok = await loop.run();
+    _reconnecting = false;
+
+    if (ok) {
+      _adapter?.sendHello(name: _identity.name, color: _identity.color);
+      // 房主会重推快照/日志，文档幂等去重，无感补齐（seq 补发）。
+      state = state.copyWith(
+        reconnecting: false,
+        reconnectFailed: false,
+        session: _session,
+      );
+    } else {
+      state = state.copyWith(reconnecting: false, reconnectFailed: true);
+    }
+  }
+
+  Future<bool> _retryEstablishLink() async {
+    switch (state.activeMode) {
+      case ConnectionMode.lan:
+        final lan = _lan;
+        if (lan == null || _joinedRoomId == null) return false;
+        final room = await lan.discoveredRooms
+            .firstWhere((r) => r.roomId == _joinedRoomId)
+            .timeout(
+              const Duration(seconds: 2),
+              onTimeout: () => throw TimeoutException('未发现房间'),
+            );
+        await lan.dial(room.endpoint);
+        return true;
+      case ConnectionMode.webrtc:
+        final webrtc = _webrtc;
+        if (webrtc == null || _joinedRoomId == null) return false;
+        await webrtc.dial(WebRtcEndpoint(
+          roomId: _joinedRoomId!,
+          roomKey: _roomKey,
+        ));
+        return true;
+      case ConnectionMode.manual:
+        final manual = _manual;
+        final invite = _lastInvite;
+        if (manual == null || invite == null) return false;
+        for (final ip in invite.ips) {
+          try {
+            await manual.dial(LanEndpoint(host: ip, port: invite.port));
+            return true;
+          } catch (_) {
+            // 尝试下一个地址。
+          }
+        }
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  /// 重连失败后的手动重新加入。
+  Future<void> rejoinAfterFailure() async {
+    final invite = _lastInvite;
+    final roomId = _joinedRoomId;
+    await leaveRoom();
+    if (invite != null) {
+      await joinByInvite(invite);
+    } else if (roomId != null) {
+      await joinByRoomId(roomId);
+    }
   }
 
   void _setupSync(RoomId roomId, List<Transport> transports) {
@@ -391,6 +498,8 @@ class RoomController extends Notifier<RoomUiState> {
     _sync?.dispose();
     _sync = null;
     _limitWarned = false;
+    _joinedRoomId = null;
+    _lastInvite = null;
     ref.read(canvasProvider.notifier).onLocalOp = null;
     await _lan?.stop();
     await _webrtc?.stop();

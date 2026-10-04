@@ -46,6 +46,9 @@ class RoomSession {
   final String roomName;
   final bool isHost;
 
+  /// 当前房主（本端为房主时即 selfPeerId）。
+  PeerId? get hostPeerId => state.hostPeerId;
+
   RoomState _state = _emptyState;
   static const RoomState _emptyState = RoomState(
     roomId: '',

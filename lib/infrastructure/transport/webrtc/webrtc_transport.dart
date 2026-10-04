@@ -196,6 +196,11 @@ class WebRtcTransport extends Transport {
     if (!_running) {
       await start(asHost: false, roomId: ep.roomId, roomKey: ep.roomKey);
     }
+    // 信令断线（如 MQTT 掉线）时先重连再走加入流程（task 5.4）。
+    if (!_signaling.isConnected) {
+      await _signaling.connect();
+      await _signaling.subscribe(_topic!);
+    }
     // 加入流程：publish join → 收 offer → answer → 链路就绪。
     final dialFuture = (_dialing[ep.roomId] ??= _join(ep));
     try {
