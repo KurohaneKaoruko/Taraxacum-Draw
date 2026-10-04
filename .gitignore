@@ -48,3 +48,6 @@ desktop.ini
 # ===== Windows / Linux =====
 **/windows/flutter/ephemeral/
 **/linux/flutter/ephemeral/
+
+# 本地构建的分发包
+dist/
