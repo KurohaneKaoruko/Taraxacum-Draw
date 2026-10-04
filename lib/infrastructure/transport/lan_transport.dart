@@ -160,7 +160,11 @@ class LanTransport extends Transport {
   int get boundPort => _server?.port ?? 0;
 
   @override
-  Future<void> start({required bool asHost, required RoomId roomId}) async {
+  Future<void> start({
+    required bool asHost,
+    required RoomId roomId,
+    String? roomKey,
+  }) async {
     if (_running) return;
     _roomId = roomId;
     if (asHost) {
